@@ -1,0 +1,119 @@
+#######################################################################
+# E2FG/PJ V1.0.240320 [E]xcel [2] [F]orti[G]ate Firewall Configurator #
+# Dated 06/12/2023                                                    #
+#######################################################################
+
+function killallexceltasks
+{
+    # Find & KIll all Excel processes
+    $excelProcesses = Get-Process -Name excel -ErrorAction SilentlyContinue
+    if ($excelProcesses) {foreach ($process in $excelProcesses) {Stop-Process -Id $process.Id -Force}}
+}
+
+function Convert-CidrToSubnetMask {
+    param ([string]$ipAddress)
+
+    if ($ipAddress -match "/") {
+        $subnetBits         =   [int]($ipAddress -split "/")[1]
+        $subnetMaskString   =   ('1' * $subnetBits).PadRight(32, '0')
+        $octets             =   for ($i = 0; $i -lt 32; $i += 8) { $subnetMaskString.Substring($i, 8) }
+        $subnetMaskDecimal  =   $octets | ForEach-Object { [Convert]::ToUInt32($_, 2) }
+        $subnetMask         =   ($subnetMaskDecimal -join '.')
+        return $subnetMask
+    } 
+}
+cls
+write-host -b white -f black "                                                     "
+write-host -b white -f black "   E2FG V1.0.231206[PJ]                              "
+write-host -b white -f black "   [E]xcel [2] [F]orti[G]ate Firewall Configurator   "
+write-host -b white -f black "                                                     "
+write-host -b green -f black "                                                     "
+$Host.UI.RawUI.CursorPosition = New-Object Management.Automation.Host.Coordinates 1, 4
+write-host -b green  -f black "  Current Directory is $PWD"
+write-host 
+$epoch_start    =   Get-date
+$newFilepath    =   "$PWD\pjtemp.xlsx" 
+$excel          =   New-Object -ComObject Excel.Application
+$excel.Visible  =   $false
+$workbook       =   $excel.Workbooks.Open($NewFilePath)
+$worksheetNames =   Get-ExcelSheetInfo -Path $newFilepath | Select-Object -ExpandProperty Name
+$dq             =   [char]34
+$pattern        =   "IRE19"  
+$epoch_end      =   Get-date
+$_delta         =   $epoch_end - $epoch_start     
+Write-host -f green "Loading Excel spreadsheet  = $_delta"
+
+foreach ($worksheetName in $worksheetNames) {if ($worksheetName -match $pattern){$_worksheetfound=$true;break} else {$_worksheetfound=$false}}
+$startRow       =   2
+$data           =   (Import-Excel -Path $NewFilePath -WorksheetName $worksheetName -StartRow $startRow) | where-object { $_.type -match "Add" -and $_.'Port Type' -match "Sub-Interface"}
+$devicename     =   $data.'Device name'| select-object  -unique
+$clustername    =   $data.'Virtual System Cluster'| select-object  -unique
+write-host -f yellow "#Clusters Detected = "  $clustername.count
+
+$script         =   $null
+$template   =   ""
+for ($c=0;($c -lt $devicename.count);$c++)
+{
+    $header       =   "config vdom
+    edit "+$dq + $devicename[$c] + $dq + "
+    config system interface"  
+    $ipPattern  = "\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"
+    $_data      =   ($data | Where-Object {($_.'Device Name' -eq $devicename[$c]) -and ($_.'Interface Description' -ne "Spare") -and ($_.'IP Address' -match $ipPattern)})
+    $template   =   ""
+    for ($_c=0;($_c -lt $_data.count);$_c++)
+    {
+#        $subnetMask     =   ($_data[$_c].'Network' -split "\/")[1] Convert-CidrToSubnetMask
+        $subnetMask     =   Convert-CidrToSubnetMask $_data[$_c].'Network' 
+        $alias          =   "vlan" + $_data[$_c].'VLAN ID' 
+        $_devicename    =   $_data[$_c].'device name' 
+        $vdom           =   $_devicename  -replace '\/', '_'     
+        $vdom           =   $vdom  -replace '\&', '_and_'
+        $vdom           =   $vdom  -replace 'VDOM', ''
+        $vdom           =   ($vdom.toupper()).trim()
+        $cluster        =   $_data[$_c].'Virtual System Cluster'
+        $intfdesc       =   $_data[$_c].'Interface Description'
+        write-host "cluster $cluater"
+        if (!$intfdesc){$intfdesc = "Not Specified"}
+        $template       =   "    edit " + $dq +  $_data[$_c].'Port' + $dq + "
+            set vdom " + $dq + $vdom + $dq + "
+            set alias " + $dq + $alias + $dq + "
+            set mode static
+            set ip " +  $_data[$_c].'IP Address' + " " +  $subnetMask + "
+            set interface " + $dq +  $_data[$_c].'Port' + $dq + "
+            set vlanid " + $_data[$_c].'VLAN ID' + "
+            set description " + $dq  +  $_data[$_c].'Interface Description' + $dq + "
+            set status down
+        next
+    "
+        if (Get-Variable -Name $cluster -ErrorAction SilentlyContinue) 
+        {
+            $existingValue = (Get-Variable -Name $cluster -ValueOnly )
+            $newValue = $existingValue + $template 
+            Set-Variable -Name $cluster -Value $newValue 
+        } 
+        else 
+        {
+            New-Variable -Name $cluster -value $template -scope local
+        }
+    }
+}
+
+for ($c=0;($c -lt $clustername.count);$c++)
+{
+    $data           =   $null
+    write-host $clustername[$c]
+    $outfilename    =   $clustername[$c] 
+    $outtextfile    =   "$PWD\$outfilename.txt"
+    $data           =   Get-Variable -Name $clustername[$c]
+    write-host -f yellow  "Data for $outfilename exported to "$outtextfile
+    $data.value | Out-File -FilePath $outtextfile
+    Remove-Variable  -Name $clustername[$c]
+}
+
+$excel.Quit()
+#killallexceltasks
+[System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel) | Out-Null
+$epoch_end      =   Get-date
+$_delta         =  $epoch_end - $epoch_start     
+Write-host -f green "Script Running             = $_delta"
+ 
