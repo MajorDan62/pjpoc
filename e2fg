@@ -14,7 +14,8 @@ function formattime{
     $timedelta  +=  "$($delta.Minutes)m "
     $timedelta  +=  "$($delta.Seconds)s"
     return   $timedelta}
-
+    
+KillExcelProcesses
 $epoch_genesis  =   Get-date
 $epoch_start    =   Get-date
 cls
